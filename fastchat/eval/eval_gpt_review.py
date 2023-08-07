@@ -13,8 +13,24 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-MAX_API_RETRY = 5
-REQ_TIME_GAP = 10
+MAX_API_RETRY = 10
+REQ_TIME_GAP = 15
+
+def parse_score(review):
+    try:
+        score_pair = review.split("\n")[0]
+        score_pair = score_pair.replace(",", " ")
+        sp = score_pair.split(" ")
+        if len(sp) == 2:
+            return [float(sp[0]), float(sp[1])]
+        else:
+            raise Exception("Invalid score pair.")
+    except Exception as e:
+        logger.error(
+            f"{e}\nContent: {review}\n" "You must manually fix the score pair."
+        )
+        return [-1, -1]
+
 
 
 @ray.remote(num_cpus=4)
@@ -23,6 +39,7 @@ def get_eval(sys_prompt, user_prompt: str, max_tokens: int):
     for i in range(MAX_API_RETRY):
         try:
             response = openai.ChatCompletion.create(
+                # model="gpt-3.5-turbo",
                 model="gpt-4",
                 messages=[
                     {"role": "system", "content": sys_prompt},
@@ -43,21 +60,6 @@ def get_eval(sys_prompt, user_prompt: str, max_tokens: int):
     logger.error(f"Failed after {MAX_API_RETRY} retries.")
     return "error"
 
-
-def parse_score(review):
-    try:
-        score_pair = review.split("\n")[0]
-        score_pair = score_pair.replace(",", " ")
-        sp = score_pair.split(" ")
-        if len(sp) == 2:
-            return [float(sp[0]), float(sp[1])]
-        else:
-            raise Exception("Invalid score pair.")
-    except Exception as e:
-        logger.error(
-            f"{e}\nContent: {review}\n" "You must manually fix the score pair."
-        )
-        return [-1, -1]
 
 
 def gen_prompt(reviewer_jsons, prompt_jsons, cat, ques, ans1, ans2):
@@ -83,7 +85,7 @@ def gen_prompt(reviewer_jsons, prompt_jsons, cat, ques, ans1, ans2):
 
 def get_json_list(file_path):
     file_path = os.path.expanduser(file_path)
-    with open(file_path, "r") as f:
+    with open(file_path, "r", encoding="utf-8") as f:
         json_list = []
         for line in f:
             json_list.append(json.loads(line))
@@ -140,8 +142,8 @@ if __name__ == "__main__":
             {
                 "review_id": review_id,
                 "question_id": question_jsons[i]["question_id"],
-                "answer1_id": answer1_jsons[i]["answer_id"],
-                "answer2_id": answer2_jsons[i]["answer_id"],
+                "answer1_id": answer1_jsons[i].get("answer_id") if answer1_jsons[i].get("answer_id") else shortuuid.uuid(),
+                "answer2_id": answer2_jsons[i].get("answer_id") if answer2_jsons[i].get("answer_id") else shortuuid.uuid(),
                 "reviewer_id": reviewer_id,
                 "metadata": {},
             }
@@ -154,9 +156,9 @@ if __name__ == "__main__":
         time.sleep(REQ_TIME_GAP)
 
     reviews = ray.get(handles)
-    with open(f"{args.output_review_file}", "w") as output_review_file:
+    with open(f"{args.output_review_file}", "w+", encoding="utf-8") as output_review_file:
         for idx, review in enumerate(reviews):
             scores = parse_score(review)
             review_jsons[idx]["text"] = review
             review_jsons[idx]["score"] = scores
-            output_review_file.write(json.dumps(review_jsons[idx]) + "\n")
+            output_review_file.write(json.dumps(review_jsons[idx], ensure_ascii= False) + "\n")
